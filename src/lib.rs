@@ -17,7 +17,8 @@ pub mod key;
 
 pub use key::{Algorithm, Key};
 
-use authenticate::{AuthenticateError, Authenticator, Presented};
+use authenticate::conclusion::SCOPE;
+use authenticate::{AuthenticateError, Authenticator, Conclusion, Presented};
 use context::Verified;
 use identify::jwt::Compact;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -162,6 +163,14 @@ impl Authenticator for Verifier {
     }
 
     fn verify(&self, presented: &Presented) -> Result<Verified, AuthenticateError> {
+        self.conclude(presented)
+            .map(|conclusion| conclusion.verified)
+    }
+
+    /// Proven, and the token's `scope` learned (RFC 9068 section 2.2.3): the
+    /// signature covers it, and until the signature held it was anyone's
+    /// word, so it is handed to the gate here and claimed nowhere.
+    fn conclude(&self, presented: &Presented) -> Result<Conclusion, AuthenticateError> {
         let name = presented.mechanism.name();
         if name != self.mechanism().name() {
             return Err(AuthenticateError::new(format!(
@@ -188,7 +197,12 @@ impl Authenticator for Verifier {
         )?;
         self.check_claims(&compact, &presented.value)?;
 
-        Ok(Verified::Proven)
+        let scopes = compact.strings_claim("scope");
+        Ok(if scopes.is_empty() {
+            Conclusion::proven()
+        } else {
+            Conclusion::proven().learning(SCOPE, scopes.join(" "))
+        })
     }
 }
 
@@ -250,6 +264,26 @@ mod tests {
         let verified = verifier().verify(&presented(&token)).expect("proven");
 
         assert_eq!(verified, Verified::Proven);
+    }
+
+    #[test]
+    fn a_proven_token_hands_the_gate_its_scopes_and_one_without_any_hands_none() {
+        let scoped = claims(NOW + 300).replacen('{', r#"{"scope":"orders:read orders:write","#, 1);
+        let token = mint(
+            r#"{"alg":"HS256","kid":"k1"}"#,
+            &scoped,
+            hs256(b"a-shared-secret"),
+        );
+        let conclusion = verifier().conclude(&presented(&token)).expect("proven");
+        assert_eq!(conclusion.learned(SCOPE), Some("orders:read orders:write"));
+
+        let bare = mint(
+            r#"{"alg":"HS256","kid":"k1"}"#,
+            &claims(NOW + 300),
+            hs256(b"a-shared-secret"),
+        );
+        let conclusion = verifier().conclude(&presented(&bare)).expect("proven");
+        assert!(conclusion.learned.is_empty());
     }
 
     #[test]
