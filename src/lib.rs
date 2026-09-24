@@ -15,8 +15,9 @@
 
 use authenticate::clock::{Clock, Window};
 use authenticate::jose::{Algorithm, Key, KeySet};
-use authenticate::{AuthenticateError, Authenticator, Conclusion, Presented};
+use authenticate::{AuthenticateError, Authenticator, Conclusion};
 use context::Verified;
+use identify::Presented;
 use identify::evidence::{self, JWT_TOKEN, SCOPE};
 use identify::jwt::Compact;
 use xcore::{Mechanism, mechanism};
