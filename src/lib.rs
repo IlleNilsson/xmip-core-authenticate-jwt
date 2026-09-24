@@ -13,39 +13,21 @@
 //! configuration, never fetched. The same token inside a payload is `jws`
 //! and another gate's.
 
-pub mod key;
-
-pub use key::{Algorithm, Key};
-
-use authenticate::conclusion::SCOPE;
+use authenticate::clock::{Clock, Window};
+use authenticate::jose::{Algorithm, Key, KeySet};
 use authenticate::{AuthenticateError, Authenticator, Conclusion, Presented};
 use context::Verified;
+use identify::evidence::{self, JWT_TOKEN, SCOPE};
 use identify::jwt::Compact;
-use std::time::{SystemTime, UNIX_EPOCH};
 use xcore::{Mechanism, mechanism};
 
-/// The proof the identify sibling attaches the compact token under.
-pub const TOKEN: &str = "jwt.token";
-
-type Clock = Box<dyn Fn() -> i64 + Send + Sync>;
-
-/// Seconds since the Unix epoch, now.
-#[must_use]
-pub fn now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |since| {
-            i64::try_from(since.as_secs()).unwrap_or(i64::MAX)
-        })
-}
-
 /// The jwt authenticator: the keys the node holds and what it expects of a
-/// token's claims.
+/// token's claims. The keys are the capability's JOSE keys
+/// (`authenticate::jose`), the ones `oidc` holds too.
 pub struct Verifier {
-    keys: Vec<Key>,
+    keys: KeySet,
     issuer: Option<String>,
     audience: Option<String>,
-    leeway: i64,
     clock: Clock,
 }
 
@@ -55,11 +37,10 @@ impl Verifier {
     #[must_use]
     pub fn new(keys: Vec<Key>) -> Self {
         Self {
-            keys,
+            keys: KeySet::new(keys),
             issuer: None,
             audience: None,
-            leeway: 60,
-            clock: Box::new(now),
+            clock: Clock::system(60),
         }
     }
 
@@ -79,57 +60,23 @@ impl Verifier {
 
     /// How far a clock may be off before `exp` and `nbf` bite.
     #[must_use]
-    pub const fn with_leeway(mut self, seconds: i64) -> Self {
-        self.leeway = seconds;
+    pub fn with_leeway(mut self, seconds: i64) -> Self {
+        self.clock = self.clock.forgiving(seconds);
         self
     }
 
     /// Where the time comes from; the tests pin it.
     #[must_use]
     pub fn with_clock(mut self, clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
-        self.clock = Box::new(clock);
+        self.clock = self.clock.reading(clock);
         self
     }
 
-    fn key_for(&self, compact: &Compact, algorithm: Algorithm) -> Result<&Key, AuthenticateError> {
-        match compact.key_id() {
-            Some(id) => self
-                .keys
-                .iter()
-                .find(|key| key.id() == Some(id.as_str()))
-                .ok_or_else(|| {
-                    AuthenticateError::new(format!("the node holds no key named '{id}'"))
-                }),
-            None => self
-                .keys
-                .iter()
-                .find(|key| key.algorithm() == algorithm)
-                .ok_or_else(|| {
-                    AuthenticateError::new(format!(
-                        "the node holds no {} key and the token names none",
-                        algorithm.name()
-                    ))
-                }),
-        }
-    }
-
     fn check_claims(&self, compact: &Compact, subject: &str) -> Result<(), AuthenticateError> {
-        let now = (self.clock)();
-
-        if let Some(expiry) = compact.numeric_claim("exp")
-            && now > expiry.saturating_add(self.leeway)
-        {
-            return Err(AuthenticateError::new(format!(
-                "the token expired at {expiry} and it is {now}"
-            )));
-        }
-        if let Some(not_before) = compact.numeric_claim("nbf")
-            && now.saturating_add(self.leeway) < not_before
-        {
-            return Err(AuthenticateError::new(format!(
-                "the token is not valid before {not_before} and it is {now}"
-            )));
-        }
+        let window = Window::between(compact.numeric_claim("nbf"), compact.numeric_claim("exp"));
+        self.clock
+            .admits(window)
+            .map_err(|outside| AuthenticateError::new(format!("the token {outside}")))?;
         if let Some(issuer) = &self.issuer
             && compact.claim("iss").as_deref() != Some(issuer.as_str())
         {
@@ -178,8 +125,8 @@ impl Authenticator for Verifier {
             )));
         }
         let token = presented
-            .proof(TOKEN)
-            .ok_or_else(|| AuthenticateError::new(format!("no {TOKEN} proof was presented")))?;
+            .proof(evidence::JWT_TOKEN)
+            .ok_or_else(|| AuthenticateError::new(format!("no {JWT_TOKEN} proof was presented")))?;
         let compact =
             Compact::parse(token).map_err(|failure| AuthenticateError::new(failure.message))?;
 
@@ -189,9 +136,9 @@ impl Authenticator for Verifier {
                 "the token's algorithm '{named}' is not one this node verifies"
             ))
         })?;
-        let key = self.key_for(&compact, algorithm)?;
-        key.verify(
+        self.keys.verify(
             algorithm,
+            compact.key_id().as_deref(),
             compact.signing_input.as_bytes(),
             &compact.signature,
         )?;
@@ -209,8 +156,6 @@ impl Authenticator for Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use hmac::{Hmac, Mac};
     use rsa::signature::{SignatureEncoding, Signer};
     use sha2::Sha256;
@@ -220,11 +165,11 @@ mod tests {
     fn mint(header: &str, claims: &str, sign: impl Fn(&[u8]) -> Vec<u8>) -> String {
         let input = format!(
             "{}.{}",
-            URL_SAFE_NO_PAD.encode(header),
-            URL_SAFE_NO_PAD.encode(claims)
+            codec::base64::encode_url_unpadded(header.as_bytes()),
+            codec::base64::encode_url_unpadded(claims.as_bytes())
         );
         let signature = sign(input.as_bytes());
-        format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature))
+        format!("{input}.{}", codec::base64::encode_url_unpadded(&signature))
     }
 
     fn hs256(secret: &[u8]) -> impl Fn(&[u8]) -> Vec<u8> {
@@ -250,7 +195,7 @@ mod tests {
     }
 
     fn presented(token: &str) -> Presented {
-        Presented::passed(mechanism::jwt(), "partner-x").with_proof(TOKEN, token)
+        Presented::passed(mechanism::jwt(), "partner-x").with_proof(evidence::JWT_TOKEN, token)
     }
 
     #[test]
@@ -335,7 +280,8 @@ mod tests {
             &claims(NOW + 300),
             hs256(b"a-shared-secret"),
         );
-        let claim = Presented::passed(mechanism::jwt(), "someone-else").with_proof(TOKEN, token);
+        let claim = Presented::passed(mechanism::jwt(), "someone-else")
+            .with_proof(evidence::JWT_TOKEN, token);
 
         let failure = verifier().verify(&claim).expect_err("refused");
 
@@ -344,7 +290,8 @@ mod tests {
 
     #[test]
     fn a_claim_of_another_mechanism_is_not_this_authenticators() {
-        let claim = Presented::passed(mechanism::oidc(), "partner-x").with_proof(TOKEN, "x.y.z");
+        let claim = Presented::passed(mechanism::oidc(), "partner-x")
+            .with_proof(evidence::JWT_TOKEN, "x.y.z");
 
         let failure = verifier().verify(&claim).expect_err("refused");
 

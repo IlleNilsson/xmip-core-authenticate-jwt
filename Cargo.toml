@@ -23,24 +23,25 @@ path = "src/lib.rs"
 
 [dependencies]
 # A Technology depends on its parent Capability, never the reverse
-# (repository-model.md): authenticate for the trait, identify for Presented
-# and the compact token reader, context for Verified, xcore for the
-# mechanism catalog.
-authenticate = { package = "xmip-core-authenticate", git = "https://github.com/IlleNilsson/xmip-core-authenticate", branch = "main" }
+# (repository-model.md): authenticate for the trait, the clock and the JOSE
+# keys, identify for Presented and the compact token reader, context for
+# Verified, xcore for the mechanism catalog.
+authenticate = { package = "xmip-core-authenticate", git = "https://github.com/IlleNilsson/xmip-core-authenticate", branch = "main", features = ["jose"] }
 identify = { package = "xmip-core-identify", git = "https://github.com/IlleNilsson/xmip-core-identify", branch = "main" }
 context = { package = "xmip-core-context", git = "https://github.com/IlleNilsson/xmip-core-context", branch = "main" }
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
-# The three signature algorithms RFC 7518 makes required or recommended:
-# HS256 through hmac and sha2, RS256 through rsa, ES256 through p256.
+# The keys and the three signature algorithms RFC 7518 makes required or
+# recommended are the capability's `jose`, which `oidc` verifies with too.
+
+[dev-dependencies]
+# The tests mint tokens: rand to generate keys, the three algorithms to sign
+# with as an issuer would, and the estate's base64url to encode them.
+rand = "0.8"
 hmac = "0.12"
 sha2 = "0.10"
 rsa = { version = "0.9", features = ["sha2"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
-
-[dev-dependencies]
-# The tests mint tokens: base64url to encode them, rand to generate keys.
-base64 = "0.22"
-rand = "0.8"
+codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 
 [lints.rust]
 # forbid, not deny: a module has no business writing unsafe. The one exception
