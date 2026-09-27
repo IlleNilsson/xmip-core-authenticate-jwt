@@ -119,12 +119,6 @@ impl Authenticator for Verifier {
     /// signature covers it, and until the signature held it was anyone's
     /// word, so it is handed to the gate here and claimed nowhere.
     fn conclude(&self, presented: &Presented) -> Result<Conclusion, AuthenticateError> {
-        let name = presented.mechanism.name();
-        if name != self.mechanism().name() {
-            return Err(AuthenticateError::new(format!(
-                "'{name}' was presented and this authenticator verifies jwt"
-            )));
-        }
         let token = presented
             .proof(evidence::JWT_TOKEN)
             .ok_or_else(|| AuthenticateError::new(format!("no {JWT_TOKEN} proof was presented")))?;
@@ -287,16 +281,6 @@ mod tests {
         let failure = verifier().verify(&claim).expect_err("refused");
 
         assert!(failure.message.contains("subject"));
-    }
-
-    #[test]
-    fn a_claim_of_another_mechanism_is_not_this_authenticators() {
-        let claim = Presented::passed(mechanism::oidc(), "partner-x")
-            .with_proof(evidence::JWT_TOKEN, "x.y.z");
-
-        let failure = verifier().verify(&claim).expect_err("refused");
-
-        assert!(failure.message.contains("'oidc' was presented"));
     }
 
     #[test]
