@@ -151,7 +151,7 @@ impl Authenticator for Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use rsa::signature::{SignatureEncoding, Signer};
     use sha2::Sha256;
 
@@ -305,7 +305,7 @@ mod tests {
     fn an_rs256_token_verifies_with_the_rsa_public_key() {
         let private = rsa::RsaPrivateKey::new(&mut rand::rngs::OsRng, 2048).expect("a key");
         let public = rsa::RsaPublicKey::from(&private);
-        let signer = rsa::pkcs1v15::SigningKey::<Sha256>::new(private);
+        let signer = rsa::pkcs1v15::SigningKey::<rsa::sha2::Sha256>::new(private);
         let token = mint(r#"{"alg":"RS256"}"#, &claims(NOW + 300), |input| {
             signer.sign(input).to_vec()
         });

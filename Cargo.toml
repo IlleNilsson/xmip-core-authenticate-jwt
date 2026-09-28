@@ -37,8 +37,8 @@ xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core
 # The tests mint tokens: rand to generate keys, the three algorithms to sign
 # with as an issuer would, and the estate's base64url to encode them.
 rand = "0.8"
-hmac = "0.12"
-sha2 = "0.10"
+hmac = "0.13"
+sha2 = "0.11"
 rsa = { version = "0.9", features = ["sha2"] }
 p256 = { version = "0.13", features = ["ecdsa", "pem"] }
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
