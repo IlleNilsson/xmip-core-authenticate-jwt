@@ -178,7 +178,7 @@ mod tests {
 
     fn claims(expiry: i64) -> String {
         format!(
-            r#"{{"sub":"partner-x","iss":"https://issuer.example","aud":["xmip"],"exp":{expiry}}}"#
+            r#"{{"sub":"party-x","iss":"https://issuer.example","aud":["xmip"],"exp":{expiry}}}"#
         )
     }
 
@@ -190,7 +190,7 @@ mod tests {
     }
 
     fn presented(token: &str) -> Presented {
-        Presented::passed(mechanism::jwt(), "partner-x").with_proof(evidence::JWT_TOKEN, token)
+        Presented::passed(mechanism::jwt(), "party-x").with_proof(evidence::JWT_TOKEN, token)
     }
 
     #[test]
@@ -257,7 +257,7 @@ mod tests {
         let token = mint(
             r#"{"alg":"HS256","kid":"k1"}"#,
             &format!(
-                r#"{{"sub":"partner-x","iss":"https://issuer.example","aud":"other","exp":{}}}"#,
+                r#"{{"sub":"party-x","iss":"https://issuer.example","aud":"other","exp":{}}}"#,
                 NOW + 300
             ),
             hs256(b"a-shared-secret"),
@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn a_claim_without_the_token_proof_names_what_is_missing() {
         let failure = verifier()
-            .verify(&Presented::passed(mechanism::jwt(), "partner-x"))
+            .verify(&Presented::passed(mechanism::jwt(), "party-x"))
             .expect_err("refused");
 
         assert!(failure.message.contains("jwt.token"));
