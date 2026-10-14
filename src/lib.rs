@@ -223,7 +223,7 @@ mod tests {
             hs256(b"a-shared-secret"),
         );
         let conclusion = verifier().conclude(&presented(&bare)).expect("proven");
-        assert!(conclusion.learned.is_empty());
+        assert_eq!(conclusion.learned, [] as [(String, String); 0]);
     }
 
     #[test]
