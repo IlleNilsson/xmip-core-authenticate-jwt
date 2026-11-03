@@ -34,13 +34,15 @@ xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core
 # recommended are the capability's `jose`, which `oidc` verifies with too.
 
 [dev-dependencies]
-# The tests mint tokens: rand to generate keys, the three algorithms to sign
-# with as an issuer would, and the estate's base64url to encode them.
+# The tests mint tokens: rand to generate the RSA key, the three algorithms
+# to sign with as an issuer would, and the estate's base64url to encode them.
+# rand 0.8, not the newest: rsa 0.9, the newest release, draws from
+# rand_core 0.6, the generation rand 0.8 is on. p256 draws its own key.
 rand = "0.8"
 hmac = "0.13"
 sha2 = "0.11"
 rsa = { version = "0.9", features = ["sha2"] }
-p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+p256 = { version = "0.14", features = ["ecdsa", "pem", "getrandom"] }
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
 
 [lints.rust]

@@ -152,6 +152,8 @@ impl Authenticator for Verifier {
 mod tests {
     use super::*;
     use hmac::{Hmac, KeyInit, Mac};
+    use p256::ecdsa::signature::Signer as _;
+    use p256::elliptic_curve::Generate as _;
     use rsa::signature::{SignatureEncoding, Signer};
     use sha2::Sha256;
 
@@ -325,7 +327,7 @@ mod tests {
 
     #[test]
     fn an_es256_token_verifies_with_the_p256_public_key() {
-        let signing = p256::ecdsa::SigningKey::random(&mut rand::rngs::OsRng);
+        let signing = p256::ecdsa::SigningKey::generate();
         let public = p256::PublicKey::from(signing.verifying_key());
         let token = mint(
             r#"{"alg":"ES256","kid":"e1"}"#,
