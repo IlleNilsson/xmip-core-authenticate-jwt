@@ -6,14 +6,19 @@
 //! The first gate read the token's `sub` and presented it as the claim, with
 //! the token itself riding as the `jwt.token` proof. This gate checks that
 //! the token was signed by a key the node holds — a shared secret, an RSA or
-//! a P-256 public key, chosen by the `kid` the header names — that it sits
-//! inside its `nbf`/`exp` window with the configured leeway, that `iss` and
-//! `aud` are the ones the node expects, and that the subject is the value
-//! that was claimed. Offline throughout (ADR-0045): the keys are
-//! configuration, never fetched. The same token inside a payload is `jws`
-//! and another gate's.
+//! a P-256 public key, chosen by the `kid` the header names — that it
+//! carries an `exp` and sits inside its `nbf`/`exp` window with the
+//! configured leeway, that `iss` and `aud` are the ones the node expects,
+//! and that the subject is the value that was claimed. The issuer and the
+//! audience are required when the verifier is made, and the three checks
+//! are the capability's (`authenticate::claims`), the ones `oidc`, `oauth2`
+//! and `saml` make too. A token without an `exp` is refused: it would prove
+//! for ever. Offline throughout (ADR-0045): the keys are configuration,
+//! never fetched. The same token inside a payload is `jws` and another
+//! gate's.
 
-use authenticate::clock::{Clock, Window};
+use authenticate::claims::{self, Expected};
+use authenticate::clock::Clock;
 use authenticate::jose::{Algorithm, Key, KeySet};
 use authenticate::{AuthenticateError, Authenticator, Conclusion};
 use context::Verified;
@@ -27,36 +32,20 @@ use xcore::{Mechanism, mechanism};
 /// (`authenticate::jose`), the ones `oidc` holds too.
 pub struct Verifier {
     keys: KeySet,
-    issuer: Option<String>,
-    audience: Option<String>,
+    expected: Expected,
     clock: Clock,
 }
 
 impl Verifier {
-    /// Verifies against these keys, with sixty seconds of leeway on the time
-    /// claims and no expectation of issuer or audience.
+    /// Verifies against these keys tokens `expected` names the issuer and
+    /// audience of, with sixty seconds of leeway on the time claims.
     #[must_use]
-    pub fn new(keys: Vec<Key>) -> Self {
+    pub fn new(keys: Vec<Key>, expected: Expected) -> Self {
         Self {
             keys: KeySet::new(keys),
-            issuer: None,
-            audience: None,
+            expected,
             clock: Clock::system(60),
         }
-    }
-
-    /// Refuse a token whose `iss` is not this.
-    #[must_use]
-    pub fn expecting_issuer(mut self, issuer: impl Into<String>) -> Self {
-        self.issuer = Some(issuer.into());
-        self
-    }
-
-    /// Refuse a token whose `aud` does not name this.
-    #[must_use]
-    pub fn expecting_audience(mut self, audience: impl Into<String>) -> Self {
-        self.audience = Some(audience.into());
-        self
     }
 
     /// How far a clock may be off before `exp` and `nbf` bite.
@@ -74,27 +63,18 @@ impl Verifier {
     }
 
     fn check_claims(&self, compact: &Compact, subject: &str) -> Result<(), AuthenticateError> {
-        let window = Window::between(compact.numeric_claim("nbf"), compact.numeric_claim("exp"));
-        self.clock
-            .admits(window)
-            .map_err(|outside| AuthenticateError::new(format!("the token {outside}")))?;
-        if let Some(issuer) = &self.issuer
-            && compact.claim("iss").as_deref() != Some(issuer.as_str())
-        {
-            return Err(AuthenticateError::new(format!(
-                "the token's issuer is not '{issuer}'"
-            )));
-        }
-        if let Some(audience) = &self.audience
-            && !compact
-                .strings_claim("aud")
-                .iter()
-                .any(|aud| aud == audience)
-        {
-            return Err(AuthenticateError::new(format!(
-                "the token's audience does not name '{audience}'"
-            )));
-        }
+        claims::current(
+            "the token",
+            &self.clock,
+            compact.numeric_claim("nbf"),
+            ("exp", compact.numeric_claim("exp")),
+        )?;
+        self.expected
+            .issued("the token", compact.claim("iss").as_deref())?;
+        self.expected.addressed(
+            "the token",
+            compact.strings_claim("aud").iter().map(String::as_str),
+        )?;
         if compact.claim("sub").as_deref() != Some(subject) {
             return Err(AuthenticateError::new(
                 "the token's subject is not the claimed value",
@@ -184,11 +164,47 @@ mod tests {
         )
     }
 
+    fn expected() -> Expected {
+        Expected::new("https://issuer.example", "xmip").expect("both")
+    }
+
     fn verifier() -> Verifier {
-        Verifier::new(vec![Key::secret(Some("k1"), b"a-shared-secret")])
-            .expecting_issuer("https://issuer.example")
-            .expecting_audience("xmip")
-            .with_clock(|| NOW)
+        Verifier::new(
+            vec![Key::secret(Some("k1"), b"a-shared-secret")],
+            expected(),
+        )
+        .with_clock(|| NOW)
+    }
+
+    #[test]
+    fn a_token_without_an_expiry_is_refused_however_well_it_is_signed() {
+        let token = mint(
+            r#"{"alg":"HS256","kid":"k1"}"#,
+            r#"{"sub":"party-x","iss":"https://issuer.example","aud":"xmip"}"#,
+            hs256(b"a-shared-secret"),
+        );
+
+        let failure = verifier().verify(&presented(&token)).expect_err("no exp");
+
+        assert!(failure.message.contains("carries no `exp`"), "{failure}");
+    }
+
+    #[test]
+    fn a_token_from_another_issuer_or_naming_none_is_refused() {
+        for claims in [
+            format!(r#"{{"sub":"party-x","iss":"https://else","aud":"xmip","exp":{NOW}0}}"#),
+            format!(r#"{{"sub":"party-x","aud":"xmip","exp":{NOW}0}}"#),
+        ] {
+            let token = mint(
+                r#"{"alg":"HS256","kid":"k1"}"#,
+                &claims,
+                hs256(b"a-shared-secret"),
+            );
+
+            let failure = verifier().verify(&presented(&token)).expect_err("issuer");
+
+            assert!(failure.message.contains("issuer is not"), "{failure}");
+        }
     }
 
     fn presented(token: &str) -> Presented {
@@ -316,8 +332,8 @@ mod tests {
             rsa::pkcs8::LineEnding::default(),
         )
         .expect("pem");
-        let verifier =
-            Verifier::new(vec![Key::rsa_pem(None, &pem).expect("a key")]).with_clock(|| NOW);
+        let verifier = Verifier::new(vec![Key::rsa_pem(None, &pem).expect("a key")], expected())
+            .with_clock(|| NOW);
 
         assert_eq!(
             verifier.verify(&presented(&token)).expect("proven"),
@@ -342,8 +358,11 @@ mod tests {
             p256::pkcs8::LineEnding::default(),
         )
         .expect("pem");
-        let verifier =
-            Verifier::new(vec![Key::p256_pem(Some("e1"), &pem).expect("a key")]).with_clock(|| NOW);
+        let verifier = Verifier::new(
+            vec![Key::p256_pem(Some("e1"), &pem).expect("a key")],
+            expected(),
+        )
+        .with_clock(|| NOW);
 
         assert_eq!(
             verifier.verify(&presented(&token)).expect("proven"),
