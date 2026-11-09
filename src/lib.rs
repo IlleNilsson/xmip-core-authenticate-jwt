@@ -13,13 +13,21 @@
 //! audience are required when the verifier is made, and the three checks
 //! are the capability's (`authenticate::claims`), the ones `oidc`, `oauth2`
 //! and `saml` make too. A token without an `exp` is refused: it would prove
-//! for ever. Offline throughout (ADR-0045): the keys are configuration,
+//! for ever. The issuer, the audience and the leeway are the `issuer`,
+//! `audience` and `leeway` settings declared in [`settings`]; a Location
+//! that leaves out the issuer or the audience is refused when it is read.
+//! The algorithm is the header's and must be the named key's: `none` and an
+//! algorithm the key does not serve are refused. Offline throughout (ADR-0045): the keys are configuration,
 //! never fetched. The same token inside a payload is `jws` and another
 //! gate's.
 
+pub mod settings;
+
+pub use settings::SETTINGS;
+
 use authenticate::claims::{self, Expected};
 use authenticate::clock::Clock;
-use authenticate::jose::{Algorithm, Key, KeySet};
+use authenticate::jose::{Algorithm, KeySet};
 use authenticate::{AuthenticateError, Authenticator, Conclusion};
 use context::Verified;
 use identify::Presented;
@@ -37,17 +45,6 @@ pub struct Verifier {
 }
 
 impl Verifier {
-    /// Verifies against these keys tokens `expected` names the issuer and
-    /// audience of, with sixty seconds of leeway on the time claims.
-    #[must_use]
-    pub fn new(keys: Vec<Key>, expected: Expected) -> Self {
-        Self {
-            keys: KeySet::new(keys),
-            expected,
-            clock: Clock::system(60),
-        }
-    }
-
     /// How far a clock may be off before `exp` and `nbf` bite.
     #[must_use]
     pub fn with_leeway(mut self, seconds: i64) -> Self {
@@ -131,6 +128,7 @@ impl Authenticator for Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use authenticate::jose::Key;
     use hmac::{Hmac, KeyInit, Mac};
     use p256::ecdsa::signature::Signer as _;
     use p256::elliptic_curve::Generate as _;
@@ -205,6 +203,55 @@ mod tests {
 
             assert!(failure.message.contains("issuer is not"), "{failure}");
         }
+    }
+
+    #[test]
+    fn a_token_naming_no_audience_is_refused() {
+        let token = mint(
+            r#"{"alg":"HS256","kid":"k1"}"#,
+            &format!(
+                r#"{{"sub":"party-x","iss":"https://issuer.example","exp":{}}}"#,
+                NOW + 300
+            ),
+            hs256(b"a-shared-secret"),
+        );
+
+        let failure = verifier().verify(&presented(&token)).expect_err("no aud");
+
+        assert_eq!(failure.message, "the token's audience does not name 'xmip'");
+    }
+
+    #[test]
+    fn a_token_before_its_not_before_is_refused_and_the_leeway_forgives_a_little() {
+        let token = mint(
+            r#"{"alg":"HS256","kid":"k1"}"#,
+            &claims(NOW + 600).replacen('{', &format!(r#"{{"nbf":{},"#, NOW + 120), 1),
+            hs256(b"a-shared-secret"),
+        );
+
+        let early = verifier().verify(&presented(&token)).expect_err("early");
+        let forgiven = verifier().with_leeway(180).verify(&presented(&token));
+
+        assert!(early.message.contains("not valid before"), "{early}");
+        assert_eq!(forgiven.expect("within the leeway"), Verified::Proven);
+    }
+
+    #[test]
+    fn a_token_signed_with_an_algorithm_its_key_does_not_serve_is_refused() {
+        // The classic confusion: an RS256 key's public half used as an HS256
+        // secret. The key named serves one algorithm and no other.
+        let token = mint(
+            r#"{"alg":"RS256","kid":"k1"}"#,
+            &claims(NOW + 300),
+            hs256(b"a-shared-secret"),
+        );
+
+        let failure = verifier().verify(&presented(&token)).expect_err("refused");
+
+        assert_eq!(
+            failure.message,
+            "the key 'k1' serves HS256 and the token is signed RS256"
+        );
     }
 
     fn presented(token: &str) -> Presented {
