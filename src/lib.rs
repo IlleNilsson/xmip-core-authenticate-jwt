@@ -129,11 +129,9 @@ impl Authenticator for Verifier {
 mod tests {
     use super::*;
     use authenticate::jose::Key;
-    use hmac::{Hmac, KeyInit, Mac};
     use p256::ecdsa::signature::Signer as _;
     use p256::elliptic_curve::Generate as _;
     use rsa::signature::{SignatureEncoding, Signer};
-    use sha2::Sha256;
 
     const NOW: i64 = 1_800_000_000;
 
@@ -149,11 +147,7 @@ mod tests {
 
     fn hs256(secret: &[u8]) -> impl Fn(&[u8]) -> Vec<u8> {
         let secret = secret.to_vec();
-        move |input| {
-            let mut mac = Hmac::<Sha256>::new_from_slice(&secret).expect("a secret");
-            mac.update(input);
-            mac.finalize().into_bytes().to_vec()
-        }
+        move |input| codec::digest::hmac_sha256(&secret, input).to_vec()
     }
 
     fn claims(expiry: i64) -> String {
