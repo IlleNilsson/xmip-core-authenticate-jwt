@@ -12,7 +12,7 @@ use core::time::Duration;
 use authenticate::AuthenticateError;
 use authenticate::claims::Expected;
 use authenticate::clock::Clock;
-use authenticate::jose::{Key, KeySet};
+use jose::jwk::{Key, KeySet};
 use xcore::settings::{Applies, Fixed, Given, Kind, Presence, Setting, Settings};
 
 use crate::Verifier;

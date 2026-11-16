@@ -3,9 +3,10 @@
 Authenticate by jwt: verifies a token's signature (HS256, RS256, ES256), expiry, issuer and audience. A technology of
 [xmip-core-authenticate](https://github.com/IlleNilsson/xmip-core-authenticate).
 
-The keys are the capability's `authenticate::jose` — a shared secret, an RSA
-or a P-256 public key, chosen by the `kid` a token names or, where it names
-none, every key of its algorithm — the ones `oidc` holds too. A token whose
+The token and its keys are the estate's one JOSE, `xmip-core-library-jose`
+(`jose::jwt`, `jose::jwk`) — a shared secret, an RSA or a P-256 public key,
+chosen by the `kid` a token names or, where it names none, every key of its
+algorithm — the ones `oidc` holds too. A token whose
 `alg` is `none`, or another than the named key serves, is refused. A token
 must carry an `exp`; it is refused without one, on or after it and before
 its `nbf`, with the configured leeway; its `iss` must be the issuer and its

@@ -17,9 +17,11 @@
 //! `audience` and `leeway` settings declared in [`settings`]; a Location
 //! that leaves out the issuer or the audience is refused when it is read.
 //! The algorithm is the header's and must be the named key's: `none` and an
-//! algorithm the key does not serve are refused. Offline throughout (ADR-0045): the keys are configuration,
-//! never fetched. The same token inside a payload is `jws` and another
-//! gate's.
+//! algorithm the key does not serve are refused. Offline throughout
+//! (ADR-0045): the keys are configuration, never fetched. The token, its
+//! keys and the check of its signature are the estate's one JOSE
+//! (`xmip-core-library-jose`). The same token inside a payload is `jws` and
+//! another gate's.
 
 pub mod settings;
 
@@ -27,17 +29,18 @@ pub use settings::SETTINGS;
 
 use authenticate::claims::{self, Expected};
 use authenticate::clock::Clock;
-use authenticate::jose::{Algorithm, KeySet};
 use authenticate::{AuthenticateError, Authenticator, Conclusion};
 use context::Verified;
 use identify::Presented;
 use identify::evidence::{self, JWT_TOKEN, SCOPE};
-use identify::jwt::Compact;
+use jose::jwk::KeySet;
+use jose::jws::Algorithm;
+use jose::jwt::Token;
 use xcore::{Mechanism, mechanism};
 
 /// The jwt authenticator: the keys the node holds and what it expects of a
-/// token's claims. The keys are the capability's JOSE keys
-/// (`authenticate::jose`), the ones `oidc` holds too.
+/// token's claims. The keys are the library's (`jose::jwk`), the ones `oidc`
+/// holds too.
 pub struct Verifier {
     keys: KeySet,
     expected: Expected,
@@ -59,20 +62,16 @@ impl Verifier {
         self
     }
 
-    fn check_claims(&self, compact: &Compact, subject: &str) -> Result<(), AuthenticateError> {
+    fn check_claims(&self, token: &Token, subject: &str) -> Result<(), AuthenticateError> {
         claims::current(
             "the token",
             &self.clock,
-            compact.numeric_claim("nbf"),
-            ("exp", compact.numeric_claim("exp")),
+            token.not_before(),
+            ("exp", token.expiry()),
         )?;
-        self.expected
-            .issued("the token", compact.claim("iss").as_deref())?;
-        self.expected.addressed(
-            "the token",
-            compact.strings_claim("aud").iter().map(String::as_str),
-        )?;
-        if compact.claim("sub").as_deref() != Some(subject) {
+        self.expected.issued("the token", token.issuer())?;
+        self.expected.addressed("the token", token.audience())?;
+        if token.subject() != Some(subject) {
             return Err(AuthenticateError::new(
                 "the token's subject is not the claimed value",
             ));
@@ -99,24 +98,23 @@ impl Authenticator for Verifier {
         let token = presented
             .proof(evidence::JWT_TOKEN)
             .ok_or_else(|| AuthenticateError::new(format!("no {JWT_TOKEN} proof was presented")))?;
-        let compact =
-            Compact::parse(token).map_err(|failure| AuthenticateError::new(failure.message))?;
+        let read = Token::read(token)?;
 
-        let named = compact.algorithm().unwrap_or_default();
-        let algorithm = Algorithm::named(&named).ok_or_else(|| {
+        let named = read.jws.algorithm().unwrap_or_default();
+        let algorithm = Algorithm::named(named).ok_or_else(|| {
             AuthenticateError::new(format!(
                 "the token's algorithm '{named}' is not one this node verifies"
             ))
         })?;
         self.keys.verify(
             algorithm,
-            compact.key_id().as_deref(),
-            compact.signing_input.as_bytes(),
-            &compact.signature,
+            read.jws.key_id(),
+            read.jws.signing_input.as_bytes(),
+            &read.jws.signature,
         )?;
-        self.check_claims(&compact, &presented.value)?;
+        self.check_claims(&read, &presented.value)?;
 
-        let scopes = compact.strings_claim("scope");
+        let scopes = read.strings_claim("scope");
         Ok(if scopes.is_empty() {
             Conclusion::proven()
         } else {
@@ -128,7 +126,7 @@ impl Authenticator for Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use authenticate::jose::Key;
+    use jose::jwk::Key;
     use p256::ecdsa::signature::Signer as _;
     use p256::elliptic_curve::Generate as _;
     use rsa::signature::{SignatureEncoding, Signer};
