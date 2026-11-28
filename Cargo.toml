@@ -15,14 +15,14 @@ path = "src/lib.rs"
 # (repository-model.md): authenticate for the trait, the clock and the
 # claims checks, identify for Presented, context for Verified, xcore for the
 # mechanism catalog.
-authenticate = { package = "xmip-core-authenticate", git = "https://github.com/IlleNilsson/xmip-core-authenticate", branch = "main" }
-identify = { package = "xmip-core-identify", git = "https://github.com/IlleNilsson/xmip-core-identify", branch = "main" }
-context = { package = "xmip-core-context", git = "https://github.com/IlleNilsson/xmip-core-context", branch = "main" }
-xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
+authenticate = { workspace = true }
+identify = { workspace = true }
+context = { workspace = true }
+xcore = { workspace = true }
 # The token, the keys and the three signature algorithms RFC 7518 makes
 # required or recommended are the estate's one JOSE (`jose::jwt`,
 # `jose::jwk`), which `oidc` verifies with too.
-jose = { package = "xmip-core-library-jose", git = "https://github.com/IlleNilsson/xmip-core-library-jose", branch = "main", features = ["key"] }
+jose = { workspace = true, features = ["key"] }
 
 [dev-dependencies]
 # The tests mint tokens: rand to generate the RSA key, the three algorithms
@@ -34,7 +34,7 @@ jose = { package = "xmip-core-library-jose", git = "https://github.com/IlleNilss
 rand = "0.8"
 rsa = { version = "0.9", features = ["sha2"] }
 p256 = { version = "0.14", features = ["ecdsa", "pem", "getrandom"] }
-codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+codec = { workspace = true }
 
 [lints]
 workspace = true
